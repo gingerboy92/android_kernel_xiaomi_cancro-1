@@ -87,6 +87,33 @@ static unsigned long lowmem_deathpending_timeout;
 			printk(x);			\
 	} while (0)
 
+
+static bool avoid_to_kill(uid_t uid)
+{
+	/*
+	 * uid info
+	 * uid == 0 > root
+	 * uid == 1001 > radio
+	 * uid == 1002 > bluetooth
+	 * uid == 1010 > wifi
+	 * uid == 1014 > dhcp
+	 */
+	if (uid == 0 || uid == 1001 || uid == 1002 || uid == 1010 ||
+			uid == 1014)
+		return 1;
+	return 0;
+}
+
+static bool protected_apps(char *comm)
+{
+	if (strcmp(comm, "d.process.acore") == 0 ||
+			strcmp(comm, "ndroid.systemui") == 0 ||
+			strcmp(comm, "ndroid.contacts") == 0 ||
+			strcmp(comm, "system:ui") == 0)
+		return 1;
+	return 0;
+}
+
 static atomic_t shift_adj = ATOMIC_INIT(0);
 static short adj_max_shift = 353;
 
@@ -414,6 +441,8 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 {
 	struct task_struct *tsk;
 	struct task_struct *selected = NULL;
+	const struct cred *pcred;
+	unsigned int uid = 0;
 	unsigned long rem = 0;
 	int tasksize;
 	int i;
@@ -573,16 +602,33 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 		selected = p;
 		selected_tasksize = tasksize;
 		selected_oom_score_adj = oom_score_adj;
-		lowmem_print(3, "select '%s' (%d), adj %hd, size %d, to kill\n",
-			     p->comm, p->pid, oom_score_adj, tasksize);
+		pcred = __task_cred(p);
+		uid = pcred->uid;
+		if (avoid_to_kill(uid) || protected_apps(p->comm)){
+			if (tasksize * (long)(PAGE_SIZE / 1024) >= 100000){
+				selected = p;
+				selected_tasksize = tasksize;
+				selected_oom_score_adj = oom_score_adj;
+				lowmem_print(3, "select protected %d (%s), adj %d, size %d, to kill\n",
+					p->pid, p->comm, oom_score_adj, tasksize);
+			} else
+			lowmem_print(3, "skip protected %d (%s), adj %d, size %d, to kill\n",
+				p->pid, p->comm, oom_score_adj, tasksize);
+		} else {
+			selected = p;
+			selected_tasksize = tasksize;
+			selected_oom_score_adj = oom_score_adj;
+			lowmem_print(3, "select %d (%s), adj %d, size %d, to kill\n",
+					p->pid, p->comm, oom_score_adj, tasksize);
+		}
 	}
 	if (selected) {
 		int i, j;
 		char zinfo[ZINFO_LENGTH];
 		char *p = zinfo;
-		lowmem_print(1, "Killing '%s' (%d), adj %hd,\n" \
+		lowmem_print(1, "Killing '%s' (%d), adj %d,\n" \
 				"   to free %ldkB on behalf of '%s' (%d) because\n" \
-				"   cache %ldkB is below limit %ldkB for oom_score_adj %hd\n" \
+				"   cache %ldkB is below limit %ldkB for oom_score_adj %d\n" \
 				"   Free memory is %ldkB above reserved.\n" \
 				"   Free CMA is %ldkB\n" \
 				"   Total reserve is %ldkB\n" \
@@ -662,7 +708,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 static struct shrinker lowmem_shrinker = {
 	.scan_objects = lowmem_scan,
 	.count_objects = lowmem_count,
-	.seeks = DEFAULT_SEEKS * 16
+	.seeks = 32
 };
 
 #ifdef CONFIG_ANDROID_BG_SCAN_MEM
