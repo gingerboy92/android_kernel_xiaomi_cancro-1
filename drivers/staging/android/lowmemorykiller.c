@@ -157,7 +157,7 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 	if (pressure >= VM_PRESSURE_ADAPTIVE_STOP) {
 		other_file = global_page_state(NR_FILE_PAGES) -
 			global_page_state(NR_SHMEM) -
-			total_swapcache_pages();
+			total_swapcache_pages;
 		other_free = global_page_state(NR_FREE_PAGES);
 
 		atomic_set(&shift_adj, 1);
@@ -170,7 +170,7 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 
 		other_file = global_page_state(NR_FILE_PAGES) -
 			global_page_state(NR_SHMEM) -
-			total_swapcache_pages();
+			total_swapcache_pages;
 
 		other_free = global_page_state(NR_FREE_PAGES);
 
@@ -247,7 +247,6 @@ static int test_task_flag(struct task_struct *p, int flag)
 }
 
 static DEFINE_MUTEX(scan_mutex);
-static DEFINE_MUTEX(auto_oom_mutex);
 
 int can_use_cma_pages(gfp_t gfp_mask)
 {
@@ -497,7 +496,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 #if defined (CONFIG_SWAP) && (defined (CONFIG_ZSWAP) || defined (CONFIG_ZRAM))
 	si_swapinfo(&si);
 	other_free = global_page_state(NR_FREE_PAGES);
-	if (global_page_state(NR_SHMEM) + total_swapcache_pages() <
+	if (global_page_state(NR_SHMEM) + total_swapcache_pages <
 		global_page_state(NR_FILE_PAGES))
 		other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM) +
@@ -512,7 +511,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 		global_page_state(NR_FILE_PAGES))
 		other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM) -
-						total_swapcache_pages();
+						total_swapcache_pages;
 	else
 		other_file = 0;
 #endif
@@ -1061,7 +1060,6 @@ module_param_array_named(adj, lowmem_adj, int, &lowmem_adj_size,
 module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size,
 			 S_IRUGO | S_IWUSR);
 module_param_named(debug_level, lowmem_debug_level, uint, S_IRUGO | S_IWUSR);
-module_param_named(auto_oom, lowmem_auto_oom, uint, S_IRUGO | S_IWUSR);
 module_param_named(lmk_fast_run, lmk_fast_run, int, S_IRUGO | S_IWUSR);
 
 module_init(lowmem_init);
