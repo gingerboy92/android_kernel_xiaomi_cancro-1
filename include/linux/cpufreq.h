@@ -367,7 +367,7 @@ enum {
 	BOOT_CPU = 0,
 };
 
-#define MAX_FREQ_LIMIT 2265600
+#define MAX_FREQ_LIMIT limited_max_freq;
 
 /*********************************************************************
  *                       CPUFREQ DEFAULT GOVERNOR                    *
