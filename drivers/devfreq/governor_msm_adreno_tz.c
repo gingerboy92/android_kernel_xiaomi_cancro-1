@@ -59,8 +59,8 @@ static DEFINE_SPINLOCK(tz_lock);
 #define DEVFREQ_ADRENO_TZ	"msm-adreno-tz"
 #define TAG "msm_adreno_tz: "
 
-/* Boolean to detect if pm has entered suspend mode */
-static bool suspended = false;
+/* Boolean to detect if panel has gone off */
+static bool power_suspended = false;
 
 static unsigned int tz_target = TARGET;
 static unsigned int tz_cap = CAP;
@@ -141,7 +141,7 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq,
 	 * Force to use & record as min freq when system has
 	 * entered pm-suspend or screen-off state.
 	 */
-	if (suspended || power_suspended) {
+	if (power_suspended) {
 		*freq = devfreq->profile->freq_table[devfreq->profile->max_state - 1];
 		return 0;
 	}
@@ -346,8 +346,6 @@ static int tz_resume(struct devfreq *devfreq)
 	struct devfreq_dev_profile *profile = devfreq->profile;
 	unsigned long freq;
 
-	suspended = false;
-
 	freq = profile->initial_freq;
 
 	return profile->target(devfreq->dev.parent, &freq, 0);
@@ -358,8 +356,6 @@ static int tz_suspend(struct devfreq *devfreq)
 	struct devfreq_msm_adreno_tz_data *priv = devfreq->data;
 	struct devfreq_dev_profile *profile = devfreq->profile;
 	unsigned long freq;
-
-	suspended = true;
 
 	priv->bin.total_time = 0;
 	priv->bin.busy_time = 0;

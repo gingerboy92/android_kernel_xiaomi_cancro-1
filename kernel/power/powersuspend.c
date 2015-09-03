@@ -20,6 +20,10 @@
  *
  *  v1.6 - remove autosleep and hybrid modes (autosleep not working on shamu)
  *
+ *  v1.6 - remove autosleep and hybrid modes (autosleep not working on LP)
+ *
+ *  v1.7 - do only run state change if change actually requests a new state
+ *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
  * may be copied, distributed, and modified under those terms.
@@ -37,7 +41,7 @@
 #include <linux/workqueue.h>
 
 #define MAJOR_VERSION	1
-#define MINOR_VERSION	6
+#define MINOR_VERSION	7
 
 struct workqueue_struct *suspend_work_queue;
 
