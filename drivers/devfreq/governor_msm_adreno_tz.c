@@ -49,9 +49,6 @@ static DEFINE_SPINLOCK(tz_lock);
 /* Boolean to detect if pm has entered suspend mode */
 static bool suspended = false;
 
-/* Boolean to detect if panel has gone off */
-static bool power_suspended = false;
-
 /* Trap into the TrustZone, and call funcs there. */
 static int __secure_tz_entry2(u32 cmd, u32 val1, u32 val2)
 {
