@@ -23,6 +23,11 @@ struct space_resv {
 #define FS_IOC_RESVSP		_IOW('X', 40, struct space_resv)
 #define FS_IOC_RESVSP64		_IOW('X', 42, struct space_resv)
 
+#define FALLOC_FL_COLLAPSE_RANGE	0X08
+#define FALLOC_FL_ZERO_RANGE		0X10
+#define FALLOC_FL_INSERT_RANGE		0X20
+
+
 #endif /* __KERNEL__ */
 
 #endif /* _FALLOC_H_ */
