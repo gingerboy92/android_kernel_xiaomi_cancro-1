@@ -59,9 +59,6 @@ static DEFINE_SPINLOCK(tz_lock);
 #define DEVFREQ_ADRENO_TZ	"msm-adreno-tz"
 #define TAG "msm_adreno_tz: "
 
-/* Boolean to detect if panel has gone off */
-static bool power_suspended = false;
-
 static unsigned int tz_target = TARGET;
 static unsigned int tz_cap = CAP;
 
