@@ -30,7 +30,8 @@
  *
  */
 
-#define REALLY_WANT_TRACEPOINTS
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -75,7 +76,7 @@ static int lowmem_minfree[6] = {
 	 4 * 1024,	/* Foreground App: 	16 MB	*/
 	 8 * 1024,	/* Visible App: 	32 MB	*/
 	16 * 1024,	/* Secondary Server: 	65 MB	*/
-	28 * 1024,	/* Hidden App: 		64 MB	*/
+	28 * 1024,      /* Hidden App:          114 MB  */
 	45 * 1024,	/* Content Provider: 	184 MB	*/
 	50 * 1024,	/* Empty App: 		204 MB	*/
 };
@@ -87,52 +88,28 @@ static unsigned long lowmem_deathpending_timeout;
 #define lowmem_print(level, x...)			\
 	do {						\
 		if (lowmem_debug_level >= (level))	\
-			printk(x);			\
+			pr_info(x);			\
 	} while (0)
-
-
-static bool avoid_to_kill(uid_t uid)
-{
-	/*
-	 * uid info
-	 * uid == 0 > root
-	 * uid == 1001 > radio
-	 * uid == 1002 > bluetooth
-	 * uid == 1010 > wifi
-	 * uid == 1014 > dhcp
-	 */
-	if (uid == 0 || uid == 1001 || uid == 1002 || uid == 1010 ||
-			uid == 1014)
-		return 1;
-	return 0;
-}
-
-static bool protected_apps(char *comm)
-{
-	if (strcmp(comm, "d.process.acore") == 0 ||
-			strcmp(comm, "ndroid.systemui") == 0 ||
-			strcmp(comm, "ndroid.contacts") == 0 ||
-			strcmp(comm, "system:ui") == 0)
-		return 1;
-	return 0;
-}
 
 static atomic_t shift_adj = ATOMIC_INIT(0);
 static short adj_max_shift = 353;
 
+#define VM_PRESSURE_ADAPTIVE_START	90
+#define VM_PRESSURE_ADAPTIVE_STOP	95
+
 /* User knob to enable/disable adaptive lmk feature */
-static int enable_adaptive_lmk;
+static int enable_adaptive_lmk = 1;
 module_param_named(enable_adaptive_lmk, enable_adaptive_lmk, int,
 	S_IRUGO | S_IWUSR);
 
 /*
  * This parameter controls the behaviour of LMK when vmpressure is in
- * the range of 88-94. Adaptive lmk triggers based on number of file
+ * the range of 90-94. Adaptive lmk triggers based on number of file
  * pages wrt vmpressure_file_min, when vmpressure is in the range of
- * 85-94. Usually this is a pseudo minfree value, higher than the
+ * 90-94. Usually this is a pseudo minfree value, higher than the
  * highest configured value in minfree array.
  */
-static int vmpressure_file_min = 52224; /* 51 * 1024 pages */
+static int vmpressure_file_min = 66560; /* (65 * 1024) * 4 = 266 MB */
 module_param_named(vmpressure_file_min, vmpressure_file_min, int,
 	S_IRUGO | S_IWUSR);
 
@@ -162,6 +139,8 @@ int adjust_minadj(short *min_score_adj)
 	return ret;
 }
 
+static unsigned long vm_pressure = 0;
+
 static int lmk_vmpressure_notifier(struct notifier_block *nb,
 			unsigned long action, void *data)
 {
@@ -172,15 +151,18 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 	if (!enable_adaptive_lmk)
 		return 0;
 
-	if (pressure >= 95) {
+	/* update vm_pressure state */
+	vm_pressure = pressure;
+
+	if (pressure >= VM_PRESSURE_ADAPTIVE_STOP) {
 		other_file = global_page_state(NR_FILE_PAGES) -
 			global_page_state(NR_SHMEM) -
-			total_swapcache_pages;
+			total_swapcache_pages();
 		other_free = global_page_state(NR_FREE_PAGES);
 
 		atomic_set(&shift_adj, 1);
 		trace_almk_vmpressure(pressure, other_free, other_file);
-	} else if (pressure >= 85) {
+	} else if (pressure >= VM_PRESSURE_ADAPTIVE_START) {
 		if (lowmem_adj_size < array_size)
 			array_size = lowmem_adj_size;
 		if (lowmem_minfree_size < array_size)
@@ -188,7 +170,7 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 
 		other_file = global_page_state(NR_FILE_PAGES) -
 			global_page_state(NR_SHMEM) -
-			total_swapcache_pages;
+			total_swapcache_pages();
 
 		other_free = global_page_state(NR_FREE_PAGES);
 
@@ -216,11 +198,43 @@ static struct notifier_block lmk_vmpr_nb = {
 	.notifier_call = lmk_vmpressure_notifier,
 };
 
+static bool avoid_to_kill(uid_t uid)
+{
+	/*
+	 * uid info
+	 * uid == 0 > root
+	 * uid == 1001 > radio
+	 * uid == 1002 > bluetooth
+	 * uid == 1010 > wifi
+	 * uid == 1013 > media
+	 * uid == 1014 > dhcp
+	 * uid == 1021 > gps
+	 * uid == 1027 > nfc
+	 */
+	if (uid == 1001 || uid == 1002 || uid == 1010
+			|| uid == 1014 || uid == 1021 ||
+			uid == 1027)
+		return 1;
+	return 0;
+}
+
+#if 0 /* LP draning RAM, We need to trigger OOM on protected_apps/system for now */
+static bool protected_apps(char *comm)
+{
+	if (strcmp(comm, "d.process.acore") == 0 ||
+			strcmp(comm, "ndroid.systemui") == 0 ||
+			strcmp(comm, "ndroid.contacts") == 0 ||
+			strcmp(comm, "system:ui") == 0)
+		return 1;
+	return 0;
+}
+#endif
+
 static int test_task_flag(struct task_struct *p, int flag)
 {
 	struct task_struct *t;
 
-	for_each_thread(p, t) {
+	for_each_thread(p,t) {
 		task_lock(t);
 		if (test_tsk_thread_flag(t, flag)) {
 			task_unlock(t);
@@ -233,6 +247,7 @@ static int test_task_flag(struct task_struct *p, int flag)
 }
 
 static DEFINE_MUTEX(scan_mutex);
+static DEFINE_MUTEX(auto_oom_mutex);
 
 int can_use_cma_pages(gfp_t gfp_mask)
 {
@@ -264,6 +279,7 @@ struct zone_avail {
 	unsigned long file;
 };
 
+
 void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 					int *other_free, int *other_file,
 					int use_cma_pages,
@@ -284,7 +300,7 @@ void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 					- zone_page_state(zone, NR_SHMEM)
 					- zone_page_state(zone, NR_SWAPCACHE);
 		if (zone_idx == ZONE_MOVABLE) {
-			if (!use_cma_pages) {
+			if (!use_cma_pages && other_free) {
 				unsigned long free_cma = zone_page_state(zone,
 						NR_FREE_CMA_PAGES);
 				za->free -= free_cma;
@@ -300,7 +316,8 @@ void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 				*other_file -= za->file;
 			za->free = za->file = 0;
 		} else if (zone_idx < classzone_idx) {
-			if (zone_watermark_ok(zone, 0, 0, classzone_idx, 0)) {
+			if (zone_watermark_ok(zone, 0, 0, classzone_idx, 0) &&
+			    other_free) {
 				unsigned long lowmem_reserve =
 					  zone->lowmem_reserve[classzone_idx];
 				if (!use_cma_pages) {
@@ -317,7 +334,8 @@ void tune_lmk_zone_param(struct zonelist *zonelist, int classzone_idx,
 					za->free -= lowmem_reserve;
 				}
 			} else {
-				*other_free -= za->free;
+				if (other_free)
+					*other_free -= za->free;
 				za->free = 0;
 			}
 		}
@@ -479,7 +497,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 #if defined (CONFIG_SWAP) && (defined (CONFIG_ZSWAP) || defined (CONFIG_ZRAM))
 	si_swapinfo(&si);
 	other_free = global_page_state(NR_FREE_PAGES);
-	if (global_page_state(NR_SHMEM) + total_swapcache_pages <
+	if (global_page_state(NR_SHMEM) + total_swapcache_pages() <
 		global_page_state(NR_FILE_PAGES))
 		other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM) +
@@ -494,7 +512,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 		global_page_state(NR_FILE_PAGES))
 		other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM) -
-						total_swapcache_pages;
+						total_swapcache_pages();
 	else
 		other_file = 0;
 #endif
@@ -556,9 +574,11 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 
 		if (time_before_eq(jiffies, lowmem_deathpending_timeout)) {
 			if (test_task_flag(tsk, TIF_MEMDIE)) {
+				int same_tgid = same_thread_group(current, tsk);
+
 				rcu_read_unlock();
 				/* give the system time to free up the memory */
-				if (!same_thread_group(current, tsk))
+				if (!same_tgid)
 					msleep_interruptible(20);
 				else
 					set_tsk_thread_flag(current,
@@ -603,27 +623,30 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 			    tasksize <= selected_tasksize)
 				continue;
 		}
-		selected = p;
-		selected_tasksize = tasksize;
-		selected_oom_score_adj = oom_score_adj;
 		pcred = __task_cred(p);
 		uid = pcred->uid;
-		if (avoid_to_kill(uid) || protected_apps(p->comm)){
-			if (tasksize * (long)(PAGE_SIZE / 1024) >= 50000){
+
+#if 0 /* LP draning RAM, We need to trigger OOM on protected_apps for now */
+		if (avoid_to_kill(uid) || protected_apps(p->comm)) {
+#else
+		if (avoid_to_kill(uid)) {
+			if (tasksize * (long)(PAGE_SIZE / 1024) >= 50000) {
 				selected = p;
 				selected_tasksize = tasksize;
 				selected_oom_score_adj = oom_score_adj;
-				lowmem_print(3, "select protected %d (%s), adj %d, size %d, to kill\n",
-					p->pid, p->comm, oom_score_adj, tasksize);
+				lowmem_print(1, "selected protected application '%s' (%d), adj %hd, size %ldkB, to kill\n",
+					p->comm, p->pid, oom_score_adj, tasksize * (long)(PAGE_SIZE / 1024));
 			} else
-			lowmem_print(3, "skip protected %d (%s), adj %d, size %d, to kill\n",
-				p->pid, p->comm, oom_score_adj, tasksize);
-		} else {
+				lowmem_print(2, "selected protected application skipped %s' (%d), adj %hd, size %ldkB, not kill\n",
+					p->comm, p->pid, oom_score_adj, tasksize * (long)(PAGE_SIZE / 1024));
+		} else
+#endif
+		{
 			selected = p;
 			selected_tasksize = tasksize;
 			selected_oom_score_adj = oom_score_adj;
-			lowmem_print(3, "select %d (%s), adj %d, size %d, to kill\n",
-					p->pid, p->comm, oom_score_adj, tasksize);
+			lowmem_print(3, "select %s' (%d), adj %hd, size %ldkB, to kill\n",
+				     p->comm, p->pid, oom_score_adj, tasksize * (long)(PAGE_SIZE / 1024));
 		}
 	}
 	if (selected) {
@@ -636,7 +659,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 		trace_lowmemory_kill(selected, cache_size, cache_limit, free);
 		lowmem_print(1, "Killing '%s' (%d), adj %hd,\n" \
 				"   to free %ldkB on behalf of '%s' (%d) because\n" \
-				"   cache %ldkB is below limit %ldkB for oom_score_adj %d\n" \
+				"   cache %ldkB is below limit %ldkB for oom_score_adj %hd\n" \
 				"   Free memory is %ldkB above reserved.\n" \
 				"   Free CMA is %ldkB\n" \
 				"   Total reserve is %ldkB\n" \
@@ -669,32 +692,31 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 			     global_page_state(NR_SLAB_UNRECLAIMABLE) *
 				(long)(PAGE_SIZE / 1024),
 			     sc->gfp_mask);
+		if (vm_pressure >= VM_PRESSURE_ADAPTIVE_START)
+			lowmem_print(1, "VM Pressure is %lu\n", vm_pressure);
+		else
+			lowmem_print(2, "VM Pressure is %lu\n", vm_pressure);
 
 		if (lowmem_debug_level >= 2 && selected_oom_score_adj == 0) {
 			show_mem(SHOW_MEM_FILTER_NODES);
 			dump_tasks(NULL, NULL);
+			show_mem_call_notifiers();
 		}
 
 		lowmem_deathpending_timeout = jiffies + HZ;
-
-		/* Due to MotoCare parser can't handle unfixed column,
-		 * show all zones info even its free & file are zero.
-		 * it will show as the following examples:
-		 *   0:0:756:1127 0:1:0:0 0:2:0:0
-		 *   0:0:767:322 0:1:152:2364 0:2:0:0
-		 */
 		for (i = 0; i < MAX_NUMNODES; i++)
 			for (j = 0; j < MAX_NR_ZONES; j++)
-				p += snprintf(p, ZINFO_DIGITS,
-					"%d:%d:%lu:%lu ", i, j,
-					zall[i][j].free,
-					zall[i][j].file);
+				if (zall[i][j].free || zall[i][j].file)
+					p += snprintf(p, ZINFO_DIGITS,
+						"%d:%d:%lu:%lu ", i, j,
+						zall[i][j].free,
+						zall[i][j].file);
 
 		trace_lmk_kill(selected->pid, selected->comm,
 				selected_oom_score_adj, selected_tasksize,
 				min_score_adj, sc->gfp_mask, zinfo);
-		send_sig(SIGKILL, selected, 0);
 		set_tsk_thread_flag(selected, TIF_MEMDIE);
+		send_sig(SIGKILL, selected, 0);
 		rem += selected_tasksize;
 		rcu_read_unlock();
 		/* give the system time to free up the memory */
@@ -888,7 +910,7 @@ static void lowmem_autodetect_oom_adj_values(void)
 		oom_adj = lowmem_adj[i];
 		oom_score_adj = lowmem_oom_adj_to_oom_score_adj(oom_adj);
 		lowmem_adj[i] = oom_score_adj;
-		lowmem_print(1, "oom_adj %d => oom_score_adj %d\n",
+		lowmem_print(1, "oom_adj %hd => oom_score_adj %hd\n",
 			     oom_adj, oom_score_adj);
 	}
 }
@@ -933,11 +955,14 @@ static const struct kparam_array __param_arr_adj = {
 #ifdef CONFIG_ANDROID_LMK_ADJ_RBTREE
 DEFINE_SPINLOCK(lmk_lock);
 struct rb_root tasks_scoreadj = RB_ROOT;
+/*
+ * Makesure to invoke the function with holding sighand->siglock
+ */
 void add_2_adj_tree(struct task_struct *task)
 {
 	struct rb_node **link;
 	struct rb_node *parent = NULL;
-	struct task_struct *task_entry;
+	struct signal_struct *sig_entry;
 	s64 key = task->signal->oom_score_adj;
 
 	/*
@@ -947,25 +972,28 @@ void add_2_adj_tree(struct task_struct *task)
 	link =  &tasks_scoreadj.rb_node;
 	while (*link) {
 		parent = *link;
-		task_entry = rb_entry(parent, struct task_struct, adj_node);
+		sig_entry = rb_entry(parent, struct signal_struct, adj_node);
 
-		if (key < task_entry->signal->oom_score_adj)
+		if (key < sig_entry->oom_score_adj)
 			link = &parent->rb_right;
 		else
 			link = &parent->rb_left;
 	}
 
-	rb_link_node(&task->adj_node, parent, link);
-	rb_insert_color(&task->adj_node, &tasks_scoreadj);
+	rb_link_node(&task->signal->adj_node, parent, link);
+	rb_insert_color(&task->signal->adj_node, &tasks_scoreadj);
 	spin_unlock(&lmk_lock);
 }
 
+/*
+ * Makesure to invoke the function with holding sighand->siglock
+ */
 void delete_from_adj_tree(struct task_struct *task)
 {
 	spin_lock(&lmk_lock);
-	if (!RB_EMPTY_NODE(&task->adj_node)) {
-		rb_erase(&task->adj_node, &tasks_scoreadj);
-		RB_CLEAR_NODE(&task->adj_node);
+	if (!RB_EMPTY_NODE(&task->signal->adj_node)) {
+		rb_erase(&task->signal->adj_node, &tasks_scoreadj);
+		RB_CLEAR_NODE(&task->signal->adj_node);
 	}
 	spin_unlock(&lmk_lock);
 }
@@ -973,20 +1001,23 @@ void delete_from_adj_tree(struct task_struct *task)
 static struct task_struct *pick_next_from_adj_tree(struct task_struct *task)
 {
 	struct rb_node *next;
+	struct signal_struct *next_tsk_sig;
 
 	spin_lock(&lmk_lock);
-	next = rb_next(&task->adj_node);
+	next = rb_next(&task->signal->adj_node);
 	spin_unlock(&lmk_lock);
 
 	if (!next)
 		return NULL;
 
-	return rb_entry(next, struct task_struct, adj_node);
+	next_tsk_sig = rb_entry(next, struct signal_struct, adj_node);
+	return next_tsk_sig->curr_target->group_leader;
 }
 
 static struct task_struct *pick_first_task(void)
 {
 	struct rb_node *left;
+	struct signal_struct *first_tsk_sig;
 
 	spin_lock(&lmk_lock);
 	left = rb_first(&tasks_scoreadj);
@@ -995,11 +1026,14 @@ static struct task_struct *pick_first_task(void)
 	if (!left)
 		return NULL;
 
-	return rb_entry(left, struct task_struct, adj_node);
+	first_tsk_sig = rb_entry(left, struct signal_struct, adj_node);
+	return first_tsk_sig->curr_target->group_leader;
 }
+
 static struct task_struct *pick_last_task(void)
 {
 	struct rb_node *right;
+	struct signal_struct *last_tsk_sig;
 
 	spin_lock(&lmk_lock);
 	right = rb_last(&tasks_scoreadj);
@@ -1008,7 +1042,8 @@ static struct task_struct *pick_last_task(void)
 	if (!right)
 		return NULL;
 
-	return rb_entry(right, struct task_struct, adj_node);
+	last_tsk_sig = rb_entry(right, struct signal_struct, adj_node);
+	return last_tsk_sig->curr_target->group_leader;
 }
 #endif
 
@@ -1026,6 +1061,7 @@ module_param_array_named(adj, lowmem_adj, int, &lowmem_adj_size,
 module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size,
 			 S_IRUGO | S_IWUSR);
 module_param_named(debug_level, lowmem_debug_level, uint, S_IRUGO | S_IWUSR);
+module_param_named(auto_oom, lowmem_auto_oom, uint, S_IRUGO | S_IWUSR);
 module_param_named(lmk_fast_run, lmk_fast_run, int, S_IRUGO | S_IWUSR);
 
 module_init(lowmem_init);
