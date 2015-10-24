@@ -478,7 +478,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 
 #if defined (CONFIG_SWAP) && (defined (CONFIG_ZSWAP) || defined (CONFIG_ZRAM))
 	si_swapinfo(&si);
-	other_free = global_page_state(NR_FREE_PAGES) - totalreserve_pages;
+	other_free = global_page_state(NR_FREE_PAGES);
 	if (global_page_state(NR_SHMEM) + total_swapcache_pages <
 		global_page_state(NR_FILE_PAGES))
 		other_file = global_page_state(NR_FILE_PAGES) -
@@ -488,8 +488,8 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 	else
 		other_file = 0;
 #else
-	other_free = global_page_state(NR_FREE_PAGES) - totalreserve_pages;
-	
+	other_free = global_page_state(NR_FREE_PAGES);
+
 	if (global_page_state(NR_SHMEM) + total_swapcache_pages <
 		global_page_state(NR_FILE_PAGES))
 		other_file = global_page_state(NR_FILE_PAGES) -
@@ -723,7 +723,7 @@ static int lowmem_shrink(struct shrinker *s, struct shrink_control *sc)
           int selected_tasksize = 0;
           short selected_oom_score_adj;
           int array_size = ARRAY_SIZE(lowmem_adj);
-          int other_free = global_page_state(NR_FREE_PAGES) - totalreserve_pages;
+          int other_free = global_page_state(NR_FREE_PAGES);
           int other_file = global_page_state(NR_FILE_PAGES) -
                                                   global_page_state(NR_SHMEM);
 
